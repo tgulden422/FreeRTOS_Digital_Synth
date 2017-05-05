@@ -29,6 +29,8 @@
 
 #define SAMPLE_FREQ			configTICK_RATE_HZ
 
+#define SPI_BAUDRATE		(	20000000	)
+
 /********   TYPE DEFS  **********/
 //voicing struct goes here
 
@@ -43,11 +45,13 @@ enum wave_type{
 	TRI
 };
 
+//state variable for voice control
 struct voices{
 	bool v_enable;
 	enum wave_type v_type;
 	long v_counter;
 	long v_period;
+	int v_note_id;
 };
 
 /****** FUNCTION PROTOTYPES  ****/
@@ -79,6 +83,7 @@ static void vMIDIInterpreter( void *pvParameters );
 void write_to_MCP4821( uint16_t input16 );
 void sample_calc( void );
 uint16_t fraction_of_FFF(long num, long den);
+long note_switcher(int note_id);
 
 
 /*******   GLOBAL VARS  *********/
@@ -115,6 +120,8 @@ static uint16_t sample_buffer;
 /***  APPLICATION FUNCTIONS  ****/
 void write_to_MCP4821( uint16_t input16 )
 {
+	//writes to DAC with max voltage depth 2.048V
+
 	union u16_to_u8 sample_to_send;
 	uint8_t sent_bytes[2];
 	int i;
@@ -124,7 +131,7 @@ void write_to_MCP4821( uint16_t input16 )
 	sent_bytes[0] = sample_to_send.u8[1];
 	sent_bytes[1] = sample_to_send.u8[0];
 
-	//send sample to spi peripheral
+	//send sample to spi peripheral in two, 8-bit chunks
 	spi_select_slave(&spi_master_instance, &slave, true);
 	spi_write_buffer_wait(&spi_master_instance, sent_bytes, 2);
 	spi_select_slave(&spi_master_instance, &slave, false);
@@ -133,6 +140,7 @@ void write_to_MCP4821( uint16_t input16 )
 
 void sample_calc( void )
 {
+	//generates sample for one time slice for all enabled voices
 	for(j=0; j<4; j++)
 	{
 		sample_buffer = 0;
@@ -174,6 +182,7 @@ void sample_calc( void )
 
 uint16_t fraction_of_FFF(long num, long den)
 {
+	//returns a fraction of 0xFFF based on numerator and denominator, for sample calculation
 	float num_f = num;
 	float den_f = den;
 	float output = (float) 0xFFF;
@@ -181,6 +190,62 @@ uint16_t fraction_of_FFF(long num, long den)
 	output = output * (num_f/den_f);
 
 	return ((uint16_t) output);
+}
+
+long note_switcher(int note_id)
+{
+	switch(note_id)
+	{
+		//returns (sample frequency)/(note frequency)
+		//only filled in one octave for testing
+		case 48: //C3
+		return 154;
+		break;
+
+		case 49: //Db3
+		return 144;
+		break;
+
+		case 50: //D3
+		return 136;
+		break;
+		
+		case 51: //Eb3
+		return 129;
+		break;
+
+		case 52: //E3
+		return 121;
+		break;
+
+		case 53: //F3
+		return 115;
+		break;		
+		
+		case 54: //Gb3
+		return 108;
+		break;
+
+		case 55: //G3
+		return 102;
+		break;
+
+		case 56: //Ab3
+		return 96;
+		break;
+		
+		case 57: //A3
+		return 91;
+		break;
+
+		case 58: //Bb3
+		return 89;
+		break;
+
+		case 59: //B3
+		return 81;
+		break;
+	}
 }
 
 
@@ -222,6 +287,7 @@ void extosc32k_setup( void )
 
 void configure_extosc32k( void )
 {
+	//starts the 32kHz external reference clock
 	struct  system_clock_source_xosc32k_config config_ext32k;
 	system_clock_source_xosc32k_get_config_defaults(&config_ext32k);
 	config_ext32k.startup_time = SYSTEM_XOSC32K_STARTUP_4096;
@@ -231,6 +297,7 @@ void configure_extosc32k( void )
 #if (!SAMC21)
 void configure_dfll_open_loop( void )
 {
+	//configures 48MHz DFLL
 	struct  system_clock_source_dfll_config config_dfll;
 	system_clock_source_dfll_get_config_defaults(&config_dfll);
 	system_clock_source_dfll_set_config(&config_dfll);
@@ -239,17 +306,18 @@ void configure_dfll_open_loop( void )
 
 void configure_gclock_generator( void )
 {
+	//configures slow clock generator for serial devices
 	struct  system_gclk_gen_config gclock_gen_conf;
 	system_gclk_gen_get_config_defaults(&gclock_gen_conf);
 	#if (SAML21) || (SAML22)
 	gclock_gen_conf.source_clock = SYSTEM_CLOCK_SOURCE_OSC16M;
-	gclock_gen_conf.division_factor = 4;
+	gclock_gen_conf.division_factor = 1;
 	#elif (SAMC21)
 	gclock_gen_conf.source_clock = SYSTEM_CLOCK_SOURCE_OSC48M;
-	gclock_gen_conf.division_factor = 4;
+	gclock_gen_conf.division_factor = 1;
 	#else
 	gclock_gen_conf.source_clock = SYSTEM_CLOCK_SOURCE_OSC8M;
-	gclock_gen_conf.division_factor = 4;
+	gclock_gen_conf.division_factor = 1;
 	#endif
 	system_gclk_gen_set_config(GCLK_GENERATOR_2, &gclock_gen_conf);
 	system_gclk_gen_enable(GCLK_GENERATOR_2);
@@ -257,6 +325,7 @@ void configure_gclock_generator( void )
 
 void configure_gclock_channel( void )
 {
+	//configures slow clock channel
 	struct  system_gclk_chan_config gclk_chan_conf;
 	system_gclk_chan_get_config_defaults(&gclk_chan_conf);
 	gclk_chan_conf.source_generator = GCLK_GENERATOR_2;
@@ -271,6 +340,7 @@ void configure_gclock_channel( void )
 
 void configure_usart(void)
 {
+	//configures UART for MIDI communication
 	struct usart_config config_usart;
 	usart_get_config_defaults(&config_usart);
 	config_usart.baudrate = USART_BAUD_RATE;
@@ -289,6 +359,7 @@ void configure_usart(void)
 
 void configure_usart_callbacks(void)
 {
+	//registers callback for start of frame on UART
 	usart_register_callback(&usart_instance,
 	usart_read_callback, USART_CALLBACK_START_RECEIVED);
 	usart_enable_callback(&usart_instance, USART_CALLBACK_START_RECEIVED);
@@ -296,6 +367,7 @@ void configure_usart_callbacks(void)
 
 void configure_usart_EDBG(void)
 {
+	//Debug UART config
 	struct usart_config config_usart;
 	usart_get_config_defaults(&config_usart);
 	config_usart.baudrate = USART_BAUD_RATE;
@@ -331,9 +403,10 @@ void configure_spi_master(void)
 	config_spi_master.pinmux_pad2 = EXT1_SPI_SERCOM_PINMUX_PAD2; //PA06
 	/* Configure pad 3 for SCK */
 	config_spi_master.pinmux_pad3 = EXT1_SPI_SERCOM_PINMUX_PAD3; //PA07
-	config_spi_master.generator_source = GCLK_GENERATOR_2;
+	config_spi_master.generator_source = GCLK_GENERATOR_0;
 	spi_init(&spi_master_instance, EXT1_SPI_MODULE, &config_spi_master);
 	spi_enable(&spi_master_instance);
+	spi_set_baudrate(&spi_master_instance, SPI_BAUDRATE);
 }
 
 /*****  INTERRUPT HANDLERS  *****/
@@ -356,7 +429,6 @@ static void vUARTHandlerTask( void *pvParameters )
 	uint8_t temp8;
 
 	//attempts to take semaphore if it is set
-	//xSemaphoreTake( UARTsem, 0 );
 
 	while(1)
 	{
@@ -366,8 +438,10 @@ static void vUARTHandlerTask( void *pvParameters )
 		while(usart_read_wait(&usart_instance, &temp) == STATUS_OK)
 		{
 			temp8 = (uint8_t) temp;	
-			xQueueSendToBack(messageQueue, &temp8, 50/portTICK_RATE_uS);
+			xQueueSendToBack(messageQueue, &temp8, 0);
 		}
+		
+		taskYIELD();
 	}
 }
 
@@ -386,6 +460,7 @@ static void vPeriodicSPITask( void *pvParameters )
 		//send sample to DAC
 		if (xStatus == pdTRUE) write_to_MCP4821( sample_to_send );
 
+		//delays for 1/(20kHz)
 		vTaskDelayUntil( &xLastWakeTime, 50/portTICK_RATE_uS );
 	}
 }
@@ -401,10 +476,40 @@ static void vMIDIInterpreter( void *pvParameters )
 		xStatus = xQueueReceive( messageQueue, &MIDI_message, 0 );
 
 		if(xStatus == pdTRUE){
-		//do midi interpretation here
+			if((MIDI_message & 0b11110000) == 0b10010000) //NOTE ON command
+			{
+				//pop note id from queue
+				xQueueReceive( messageQueue, &MIDI_message, 0 );
+
+				for(j=0; j<4; j++)
+				{
+					if(active_voices[j].v_enable == false)
+					{
+						active_voices[j].v_enable = true;
+						active_voices[j].v_note_id = 0x7F & MIDI_message;
+						active_voices[j].v_period = note_switcher(0x7F & MIDI_message);
+						active_voices[j].v_counter = 0;
+						break;
+					}
+				}
+			}
+			else if((MIDI_message & 0b11110000) == 0b10000000) //NOTE OFF command
+			{
+				//pop note id from queue
+				xQueueReceive( messageQueue, &MIDI_message, 0 );
+
+				for(j=0; j<4; j++)
+				{
+					if((active_voices[j].v_enable == true) && (active_voices[j].v_note_id == MIDI_message)
+					{
+						active_voices[j].v_enable = false;
+					}
+				}
+			}
 		}
-		else{
-		taskYIELD();
+		else
+		{
+			taskYIELD();
 		}
 	}
 }
@@ -418,15 +523,18 @@ static void vSampleCalcTask( void *pvParameters )
 		//interpret state variables and do sample computation here, then push to sample queue
 		while(full_queue_flag)
 		{
+			//runs if there is a sample waiting in the compute buffer, pushes it to queue, resets flag if successful
 			xStatus = xQueueSendToBackFromISR(sampleQueue, &sample_buffer, 0);
 			if(xStatus == pdTRUE) full_queue_flag = false;
 		}
 
+		//calculates samples based state variables and puts it in buffer
 		sample_calc();
 
 		xStatus = xQueueSendToBackFromISR(sampleQueue, &sample_buffer, 0);
 		if (xStatus == pdFALSE)
 		{
+			//sets full queue flag if push to queue fails
 			full_queue_flag = true;
 		}
 	}
@@ -435,116 +543,34 @@ static void vSampleCalcTask( void *pvParameters )
 /*******      MAIN     **********/
 int main ( void )
 {
+	//peripheral config
 	system_init();
 
-
 	extosc32k_setup();
-	dfll_setup();	configure_gclock_generator();
-	configure_gclock_channel();	configure_usart();
+	dfll_setup();	configure_gclock_generator();
+	configure_gclock_channel();	configure_usart();
 	configure_usart_EDBG();
-	configure_usart_callbacks();	system_interrupt_enable_global();
-
+	configure_usart_callbacks();	system_interrupt_enable_global();
 	configure_spi_master();
-
 
 	printf("PROGRAM START!\r\n");
 
-	uint16_t test_sample = fraction_of_FFF(45, 45);
 
-	active_voices[0].v_enable = true;
-	active_voices[0].v_type = TRI;
-	active_voices[0].v_counter = 0;
-	active_voices[0].v_period = 5;
+	//Begin FreeRTOS Setup
 
-	j=0;
+	//create queues and semaphore
+	sampleQueue = xQueueCreate(100, sizeof(uint16_t));
+	messageQueue = xQueueCreate(100, sizeof(uint8_t));
 
-	//SQUARE TEST
-	while(0)
-	{
-		if(active_voices[j].v_counter <= (active_voices[j].v_period)/2)
-		{
-			sample_buffer = (uint16_t) (0xFFF >> 2);
-		}
-		else sample_buffer = 0;
+	//UARTsem = vSemaphoreCreateBinary();
 
-		if(active_voices[0].v_counter < active_voices[0].v_period)
-		{
-			active_voices[0].v_counter++;
-		}
-		else active_voices[0].v_counter = 0;
-	
-		write_to_MCP4821(sample_buffer);
-	}
+	xTaskCreate(vSampleCalcTask, "Synth", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
+	xTaskCreate(vMIDIInterpreter, "MIDI Interp", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
+	xTaskCreate(vPeriodicSPITask, "SPI Push", configMINIMAL_STACK_SIZE, NULL, 3, NULL);
+	xTaskCreate(vUARTHandlerTask, "UART read", configMINIMAL_STACK_SIZE, NULL, 4, NULL);
 
-
-	//TRIANGLE TEST
-	while(1)
-	{
-
-		if(active_voices[j].v_counter <= ((active_voices[j].v_period) >> 1))
-		{
-			sample_buffer = (uint16_t) (fraction_of_FFF((active_voices[j].v_counter << 1), active_voices[j].v_period) >> 2);
-		}
-		else if(active_voices[j].v_counter > ((active_voices[j].v_period) >> 1))
-		{
-			sample_buffer = (uint16_t) (fraction_of_FFF(((active_voices[j].v_period - active_voices[j].v_counter) << 1), active_voices[j].v_period) >> 2);
-		}
-
-		if(active_voices[0].v_counter < active_voices[0].v_period)
-		{
-			active_voices[0].v_counter++;
-		}
-		else active_voices[0].v_counter = 0;
-
-		write_to_MCP4821(sample_buffer*3);
-	}
-
-
-	//SAW TEST
-	while(1)
-	{
-
-		sample_buffer = (uint16_t) ((0xFFF * (active_voices[0].v_counter/active_voices[0].v_period)) >> 2);
-
-
-		if(active_voices[0].v_counter < active_voices[0].v_period)
-		{
-			active_voices[0].v_counter++;
-		}
-		else active_voices[0].v_counter = 0;
-	
-		write_to_MCP4821(sample_buffer);
-	}
-
-// 	//global variable inits
-// 	full_queue_flag = false;
-// 
-// 	for (n=0; n<4; n++)
-// 	{
-// 		active_voices[n].v_enable = false;
-// 		active_voices[n].v_counter = 0;
-// 	}
-// 
-// 	active_voices[0].v_enable = true;
-// 	active_voices[0].v_type = SQUARE;
-// 	active_voices[0].v_counter = 0;
-// 	active_voices[0].v_period = 45;
-// 
-// 	//Begin FreeRTOS Setup
-// 
-// 	//create queues and semaphore
-// 	sampleQueue = xQueueCreate(100, sizeof(uint16_t));
-// 	messageQueue = xQueueCreate(100, sizeof(uint8_t));
-// 
-// 	//UARTsem = vSemaphoreCreateBinary();
-// 
-// 	xTaskCreate(vSampleCalcTask, "Synth", configMINIMAL_STACK_SIZE, NULL, 1, NULL);
-// 	xTaskCreate(vMIDIInterpreter, "MIDI Interp", configMINIMAL_STACK_SIZE, NULL, 2, NULL);
-// 	xTaskCreate(vPeriodicSPITask, "SPI Push", configMINIMAL_STACK_SIZE, NULL, 3, NULL);
-// 	//xTaskCreate(vUARTHandlerTask, "UART read", configMINIMAL_STACK_SIZE, NULL, 4, NULL);
-// 
-// 	vTaskStartScheduler();
-// 	while(1);
+	vTaskStartScheduler();
+	while(1);
 
 
 }
